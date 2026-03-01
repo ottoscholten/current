@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { startOfWeek, addWeeks, addDays, format, isSameDay } from "date-fns";
 import { ChevronLeft, ChevronRight, Heart, ExternalLink } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -46,6 +46,7 @@ const ThisWeek = () => {
   const { user, session } = useAuth();
   const queryClient = useQueryClient();
   const [syncing, setSyncing] = useState(false);
+  const syncFiredRef = useRef(false);
 
   const { data: profile } = useQuery({
     queryKey: ["profile", user?.id],
@@ -63,7 +64,8 @@ const ThisWeek = () => {
   const hasTasteProfile = !!profile?.taste_profile?.trim();
 
   useEffect(() => {
-    if (!user || !session) return;
+    if (!user || !session || syncFiredRef.current) return;
+    syncFiredRef.current = true;
 
     const sync = async () => {
       setSyncing(true);
@@ -192,13 +194,13 @@ const ThisWeek = () => {
 
       {/* Event detail modal */}
       <Dialog open={!!selectedEvent} onOpenChange={(open) => !open && setSelectedEvent(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] flex flex-col">
           {selectedEvent && (
             <>
               <DialogHeader>
                 <DialogTitle className="text-base">{selectedEvent.title}</DialogTitle>
               </DialogHeader>
-              <div className="space-y-3">
+              <div className="space-y-3 overflow-y-auto">
                 <div className="flex items-center justify-between text-sm">
                   <span className="font-medium text-foreground">{selectedEvent.venue}</span>
                   <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", categoryColors[selectedEvent.category])}>
