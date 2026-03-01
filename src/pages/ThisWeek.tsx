@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { startOfWeek, addWeeks, addDays, format, isSameDay, isToday } from "date-fns";
+import { startOfDay, addDays, format, isSameDay, isToday } from "date-fns";
 import { ChevronLeft, ChevronRight, ExternalLink, X, Heart } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -85,17 +85,13 @@ const ThisWeek = () => {
     sync();
   }, [user?.id]);
 
-  // When week changes, snap to today if in view, else Monday
+  // When window shifts, snap selected day to the first day of the new window
   useEffect(() => {
-    const ws = startOfWeek(addWeeks(new Date(), weekOffset), { weekStartsOn: 1 });
-    const ds = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
-    const today = new Date();
-    const todayInWeek = ds.find((d) => isSameDay(d, today));
-    setSelectedDay(todayInWeek ?? ws);
+    setSelectedDay(addDays(startOfDay(new Date()), weekOffset * 7));
     setSelectedEvent(null);
   }, [weekOffset]);
 
-  const weekStart = startOfWeek(addWeeks(new Date(), weekOffset), { weekStartsOn: 1 });
+  const weekStart = addDays(startOfDay(new Date()), weekOffset * 7);
   const weekEnd = addDays(weekStart, 6);
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
