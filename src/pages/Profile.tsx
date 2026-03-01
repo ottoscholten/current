@@ -69,11 +69,18 @@ const row = data?.[0];
       toast.error("Saved, but taste tags couldn't be generated");
     }
 
-    // Reset sync so next ThisWeek visit re-syncs with new profile
+    // Reset sync state so next ThisWeek visit re-syncs with new taste profile.
+    // Clear synced_days so all days are re-fetched, and delete unsaved events.
     await supabase
       .from("user_source_prefs")
-      .update({ last_synced_at: null })
+      .update({ last_synced_at: null, synced_days: [] })
       .eq("user_id", user.id);
+
+    await supabase
+      .from("events")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("is_saved", false);
 
     setSaving(false);
     toast.success("Taste profile saved");

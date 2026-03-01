@@ -39,7 +39,6 @@ const ThisWeek = () => {
   const [weekOffset, setWeekOffset] = useState(0);
   const [selectedDay, setSelectedDay] = useState<Date>(new Date());
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
-  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [syncing, setSyncing] = useState(false);
   const syncFiredRef = useRef(false);
   const isMobile = useIsMobile();
@@ -103,12 +102,21 @@ const ThisWeek = () => {
 
   const dayEvents = events.filter((e) => isSameDay(new Date(e.date), selectedDay));
 
-  const toggleSave = (id: string) => {
-    setSavedIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  const toggleSave = async (id: string) => {
+    const event = events.find((e) => e.id === id);
+    if (!event) return;
+    const newSaved = !event.isSaved;
+
+    // Optimistic update
+    queryClient.setQueryData<EventItem[]>(
+      ["events", weekStart.toISOString(), user?.id],
+      (prev) => prev?.map((e) => e.id === id ? { ...e, isSaved: newSaved } : e) ?? []
+    );
+
+    // Also update selected event if it's open
+    if (selectedEvent?.id === id) setSelectedEvent((e) => e ? { ...e, isSaved: newSaved } : e);
+
+    await supabase.from("events").update({ is_saved: newSaved }).eq("id", id);
   };
 
   const handleSelectDay = (day: Date) => {
@@ -241,7 +249,7 @@ const ThisWeek = () => {
                     >
                       <EventCard
                         event={event}
-                        isSaved={savedIds.has(event.id)}
+                        isSaved={event.isSaved ?? false}
                         isSelected={selectedEvent?.id === event.id}
                         onToggleSave={() => toggleSave(event.id)}
                         onClick={() =>

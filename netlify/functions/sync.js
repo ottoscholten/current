@@ -1,8 +1,21 @@
 import { createClient } from '@supabase/supabase-js'
 import { syncRA } from '../lib/sources/ra.js'
+import { syncWebsite } from '../lib/sources/website.js'
 // import { syncDice } from '../lib/sources/dice.js'  // uncomment when ready
 
-const STALE_HOURS = 6
+const MIN_CHECK_INTERVAL_HOURS = 1
+
+// Returns the next 7 date strings starting from today
+function getWeekDays() {
+  const days = []
+  const today = new Date()
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today)
+    d.setDate(today.getDate() + i)
+    days.push(d.toISOString().split('T')[0])
+  }
+  return days
+}
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -32,10 +45,10 @@ export const handler = async (event) => {
     return { statusCode: 200, body: JSON.stringify({ ok: true, skipped: true, reason: 'no taste profile' }) }
   }
 
-  // Fetch all active sources for this user with their last sync time
+  // Fetch all active sources for this user
   const { data: activePrefs } = await supabase
     .from('user_source_prefs')
-    .select('source_id, last_synced_at, sources(name)')
+    .select('source_id, last_synced_at, skip_taste_filter, sync_interval_hours, synced_days, sources(id, name, url, is_platform, selectors)')
     .eq('user_id', user.id)
     .eq('is_active', true)
 
@@ -43,11 +56,17 @@ export const handler = async (event) => {
     return { statusCode: 200, body: JSON.stringify({ ok: true, skipped: true, reason: 'no active sources' }) }
   }
 
-  // Sync a source if it has never been synced (new) or is stale
-  const staleAt = new Date(Date.now() - STALE_HOURS * 60 * 60 * 1000)
-  const sourcesToSync = activePrefs.filter(p =>
-    !p.last_synced_at || new Date(p.last_synced_at) < staleAt
-  )
+  const upcomingDays = getWeekDays()
+  const checkCutoff = new Date(Date.now() - MIN_CHECK_INTERVAL_HOURS * 60 * 60 * 1000)
+
+  // Sync a source if:
+  // - It hasn't been checked in the last hour (rate limit), AND
+  // - At least one upcoming day isn't in synced_days yet
+  const sourcesToSync = activePrefs.filter(p => {
+    if (p.last_synced_at && new Date(p.last_synced_at) > checkCutoff) return false
+    const synced = p.synced_days ?? []
+    return upcomingDays.some(d => !synced.includes(d))
+  })
 
   if (!sourcesToSync.length) {
     return { statusCode: 200, body: JSON.stringify({ ok: true, skipped: true, reason: 'fresh' }) }
@@ -56,17 +75,32 @@ export const handler = async (event) => {
   const results = {}
 
   for (const pref of sourcesToSync) {
-    const name = pref.sources.name
+    const source = pref.sources
+    const name = source.name
+
     try {
-      switch (name) {
-        case 'Resident Advisor London':
-          results[name] = await syncRA(supabase, user.id, profile.taste_profile, profile.taste_parsed || [])
-          break
-        // case 'Dice':
-        //   results[name] = await syncDice(supabase, user.id, profile.taste_profile)
-        //   break
-        default:
-          results[name] = { skipped: true, reason: 'no handler' }
+      if (!source.is_platform) {
+        // User-added website source — sync using saved CSS selectors
+        results[name] = await syncWebsite(
+          supabase,
+          user.id,
+          profile.taste_profile,
+          profile.taste_parsed || [],
+          source,
+          pref.skip_taste_filter,
+        )
+      } else {
+        // Built-in platform integration
+        switch (name) {
+          case 'Resident Advisor London':
+            results[name] = await syncRA(supabase, user.id, profile.taste_profile, profile.taste_parsed || [])
+            break
+          // case 'Dice':
+          //   results[name] = await syncDice(supabase, user.id, profile.taste_profile, profile.taste_parsed || [])
+          //   break
+          default:
+            results[name] = { skipped: true, reason: 'no handler' }
+        }
       }
     } catch (err) {
       console.error(`Sync error for ${name}:`, err.message)
