@@ -33,10 +33,33 @@ function parseEventTime(timeStr, timeFormat) {
 }
 
 function extractDateFromHeader($, el, dateHeaderSelector) {
+  // 1. Sibling traversal — agenda layouts where a date header row precedes event rows
   let current = $(el).prev()
   while (current.length) {
     if (current.is(dateHeaderSelector)) return current.text().trim()
+    // Handle compound selectors like "div.header h2" — sibling is the parent wrapper
+    const nested = current.find(dateHeaderSelector)
+    if (nested.length) return nested.first().text().trim()
     current = current.prev()
+  }
+  // 2. Ancestor wrapper — grouped layouts where events are nested inside a date container
+  // (e.g. <div data-day="2026-03-01"><article>...</article></div>)
+  const ancestor = $(el).closest(dateHeaderSelector)
+  if (ancestor.length) {
+    // Prefer a data attribute that looks like a date (ISO or readable)
+    const attrs = ancestor[0]?.attribs || {}
+    for (const val of Object.values(attrs)) {
+      if (/\d{4}-\d{2}-\d{2}/.test(String(val))) return String(val)
+    }
+    // Fall back: first child whose text doesn't come from a nested event article
+    let dateText = ''
+    ancestor.children().each((_, child) => {
+      if (dateText) return false
+      if ($(child).is('article') || $(child).find('article').length) return
+      const text = $(child).text().trim()
+      if (text) dateText = text
+    })
+    return dateText
   }
   return ''
 }
@@ -56,20 +79,70 @@ function extractHref($, el, linkSelector, fallbackUrl) {
   return $(el).find('a').first().attr('href') || fallbackUrl
 }
 
+// Extract date using the structured dateStrategy (new sources).
+function extractDateFromStrategy($, el, dateStrategy) {
+  if (!dateStrategy) return ''
+  const jel = $(el)
+
+  switch (dateStrategy.type) {
+    case 'ancestor_attribute': {
+      const ancestor = jel.closest(dateStrategy.selector)
+      return ancestor.length ? (ancestor.attr(dateStrategy.attribute) || '') : ''
+    }
+    case 'ancestor_text': {
+      const ancestor = jel.closest(dateStrategy.selector)
+      if (!ancestor.length) return ''
+      const ownText = ancestor.clone().children().remove().end().text().trim()
+      return ownText || ancestor.text().trim()
+    }
+    case 'sibling_header': {
+      let current = jel.prev()
+      while (current.length) {
+        if (current.is(dateStrategy.selector)) return current.text().trim()
+        const nested = current.find(dateStrategy.selector)
+        if (nested.length) return nested.first().text().trim()
+        current = current.prev()
+      }
+      return ''
+    }
+    case 'descendant':
+      return jel.find(dateStrategy.selector).first().text().trim()
+    case 'descendant_attribute':
+      return jel.find(dateStrategy.selector).first().attr(dateStrategy.attribute) || ''
+    case 'link_href': {
+      const href = jel.find(dateStrategy.selector).first().attr('href') || ''
+      const m = href.match(/(20\d{2})([01]\d)([0-3]\d)/)
+      return m ? `${m[1]}-${m[2]}-${m[3]}` : ''
+    }
+    default:
+      return ''
+  }
+}
+
 function scrapeEvents($, selectors, sourceUrl) {
   const events = []
-  const isHybridLayout = !!(selectors.dateHeader && selectors.date)
   let lastDateStr = ''
+
   $(selectors.container).each((_, el) => {
     const title = $(el).find(selectors.title).first().text().trim()
-    const headerDate = selectors.dateHeader ? extractDateFromHeader($, el, selectors.dateHeader) : ''
-    const rowDate = selectors.date ? $(el).find(selectors.date).first().text().trim() : ''
-    // In hybrid layouts a missing day number means no specific date — skip
-    if (isHybridLayout && !rowDate) return
-    const resolved = headerDate && rowDate ? combineDateParts(rowDate, headerDate) : headerDate || rowDate
-    // Carry forward the last seen date for non-hybrid layouts
-    const dateStr = resolved || lastDateStr
-    if (resolved) lastDateStr = resolved
+
+    let dateStr
+    if (selectors.dateStrategy) {
+      // New path: structured date strategy derived from DOM analysis
+      const raw = extractDateFromStrategy($, el, selectors.dateStrategy)
+      dateStr = raw || lastDateStr
+      if (raw) lastDateStr = raw
+    } else {
+      // Legacy path: old date/dateHeader selector approach (existing saved sources)
+      const isHybridLayout = !!(selectors.dateHeader && selectors.date && selectors.date !== selectors.dateHeader)
+      const headerDate = selectors.dateHeader ? extractDateFromHeader($, el, selectors.dateHeader) : ''
+      const rowDate = selectors.date ? $(el).find(selectors.date).first().text().trim() : ''
+      if (isHybridLayout && !rowDate) return
+      const resolved = headerDate && rowDate ? combineDateParts(rowDate, headerDate) : headerDate || rowDate
+      dateStr = resolved || lastDateStr
+      if (resolved) lastDateStr = resolved
+    }
+
     const timeStr = selectors.time ? $(el).find(selectors.time).first().text().trim() : ''
     const href = extractHref($, el, selectors.link, sourceUrl)
     const description = selectors.description
@@ -107,14 +180,19 @@ export async function syncWebsite(supabase, userId, tasteProfile, tasteParsed = 
   const html = selectors.needsBrowserless ? await fetchWithBrowserless(url) : await fetchPage(url)
   const $ = cheerio.load(html)
   const scraped = scrapeEvents($, selectors, url)
+  console.log(`[syncWebsite] ${sourceName}: scraped ${scraped.length} raw events`)
+  if (scraped.length > 0) console.log(`[syncWebsite] sample:`, JSON.stringify(scraped.slice(0, 2)))
   if (!scraped.length) return 0
 
-  const isHybrid = selectors.dateHeader && selectors.date
-  const dateFormat = isHybrid ? null : selectors.dateHeader ? selectors.dateHeaderFormat : selectors.dateFormat
+  // New sources use dateStrategy — parseEventDate tries all formats automatically.
+  // Old sources (date/dateHeader selectors) may have a stored format hint.
+  const isHybrid = !selectors.dateStrategy && selectors.dateHeader && selectors.date
+  const dateFormat = selectors.dateStrategy
+    ? null
+    : (isHybrid ? null : selectors.dateHeader ? selectors.dateHeaderFormat : selectors.dateFormat)
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
-  // Store all future events — no upper cap (unlike RA's 7-day window)
   const futureEvents = scraped
     .map(e => {
       const parsed = parseEventDate(e.dateStr, dateFormat)
@@ -139,6 +217,7 @@ export async function syncWebsite(supabase, userId, tasteProfile, tasteParsed = 
     })
     .filter(Boolean)
 
+  console.log(`[syncWebsite] ${sourceName}: ${futureEvents.length} future events after date filter`)
   if (!futureEvents.length) return 0
 
   let toInsert = futureEvents
@@ -159,16 +238,19 @@ export async function syncWebsite(supabase, userId, tasteProfile, tasteParsed = 
     }
   }
 
-  await supabase.from('events').delete().eq('source_id', sourceId).eq('user_id', userId)
+  await supabase.from('events').delete().eq('source_id', sourceId).eq('user_id', userId).eq('is_saved', false)
   const primaryCategory = (sourceCategories && sourceCategories[0]) || 'Other'
-  await supabase.from('events').insert(toInsert.map(e => toWebsiteRow(e, userId, sourceId, primaryCategory)))
+  const rows = toInsert.map(e => toWebsiteRow(e, userId, sourceId, primaryCategory))
+  console.log(`[syncWebsite] ${sourceName}: inserting ${rows.length} events, sample:`, JSON.stringify(rows[0]))
+  const { error: insertError } = await supabase.from('events').insert(rows)
+  if (insertError) console.error(`[syncWebsite] ${sourceName} insert error:`, insertError.message)
   await updateLastSynced(supabase, userId, sourceId)
 
-  return toInsert.length
+  return rows.length
 }
 
 async function clearAndUpdateSync(supabase, userId, sourceId) {
-  await supabase.from('events').delete().eq('source_id', sourceId).eq('user_id', userId)
+  await supabase.from('events').delete().eq('source_id', sourceId).eq('user_id', userId).eq('is_saved', false)
   await updateLastSynced(supabase, userId, sourceId)
 }
 

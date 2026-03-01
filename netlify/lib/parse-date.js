@@ -1,18 +1,26 @@
 import { parse, isValid } from 'date-fns'
 
 const FALLBACK_FORMATS = [
+  // Full date with year
   'd MMMM yyyy',
   'dd MMMM yyyy',
   'EEEE d MMMM yyyy',
   'EEEE, d MMMM yyyy',
-  'EEEE d MMMM',
-  'dd/MM/yyyy',
-  'd/MM/yyyy',
+  'EEE d MMM yyyy',
+  'EEE, d MMM yyyy',
   'dd MMM yyyy',
   'd MMM yyyy',
+  'dd/MM/yyyy',
+  'd/MM/yyyy',
   'yyyy-MM-dd',
   'MMMM d, yyyy',
   'MMM d, yyyy',
+  // Date without year — uses current year from reference date
+  'EEEE d MMMM',
+  'EEE d MMM',
+  'EEE, d MMM',
+  'd MMMM',
+  'd MMM',
 ]
 
 export function parseEventDate(dateStr, dateFormat) {
@@ -20,9 +28,12 @@ export function parseEventDate(dateStr, dateFormat) {
 
   const ref = new Date()
 
-  // Try native Date (handles ISO 8601 and many standard formats)
-  const native = new Date(dateStr)
-  if (isValid(native) && native.getFullYear() > 2000) return native
+  // Try native Date only when the string contains a 4-digit year (ISO 8601, RFC 2822, etc.)
+  // Strings without a year (e.g. "Sun 1 Mar") would be misinterpreted as a past year.
+  if (/\d{4}/.test(dateStr)) {
+    const native = new Date(dateStr)
+    if (isValid(native) && native.getFullYear() > 2000) return native
+  }
 
   // Try the stored format first
   if (dateFormat) {

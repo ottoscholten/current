@@ -5,18 +5,6 @@ import { syncWebsite } from '../lib/sources/website.js'
 
 const MIN_CHECK_INTERVAL_HOURS = 1
 
-// Returns the next 14 date strings starting from today
-function getWeekDays() {
-  const days = []
-  const today = new Date()
-  for (let i = 0; i < 14; i++) {
-    const d = new Date(today)
-    d.setDate(today.getDate() + i)
-    days.push(d.toISOString().split('T')[0])
-  }
-  return days
-}
-
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method not allowed' }
@@ -46,26 +34,30 @@ export const handler = async (event) => {
   }
 
   // Fetch all active sources for this user
-  const { data: activePrefs } = await supabase
+  const { data: activePrefs, error: prefsError } = await supabase
     .from('user_source_prefs')
-    .select('source_id, last_synced_at, skip_taste_filter, sync_interval_hours, synced_days, sources(id, name, url, categories, is_platform, selectors)')
+    .select('source_id, last_synced_at, skip_taste_filter, sync_interval_hours, sources(id, name, url, categories, is_platform, selectors)')
     .eq('user_id', user.id)
     .eq('is_active', true)
+
+  if (prefsError) {
+    console.error('Failed to fetch active prefs:', prefsError.message)
+    return { statusCode: 500, body: JSON.stringify({ error: prefsError.message }) }
+  }
 
   if (!activePrefs?.length) {
     return { statusCode: 200, body: JSON.stringify({ ok: true, skipped: true, reason: 'no active sources' }) }
   }
 
-  const upcomingDays = getWeekDays()
-  const checkCutoff = new Date(Date.now() - MIN_CHECK_INTERVAL_HOURS * 60 * 60 * 1000)
+  const minCutoff = new Date(Date.now() - MIN_CHECK_INTERVAL_HOURS * 60 * 60 * 1000)
 
-  // Sync a source if:
-  // - It hasn't been checked in the last hour (rate limit), AND
-  // - At least one upcoming day isn't in synced_days yet
+  // Sync a source if it hasn't been checked in the last hour AND is stale per its own interval
   const sourcesToSync = activePrefs.filter(p => {
-    if (p.last_synced_at && new Date(p.last_synced_at) > checkCutoff) return false
-    const synced = p.synced_days ?? []
-    return upcomingDays.some(d => !synced.includes(d))
+    if (p.last_synced_at && new Date(p.last_synced_at) > minCutoff) return false
+    if (!p.last_synced_at) return true
+    const intervalHours = p.sync_interval_hours ?? 24
+    const staleAfter = new Date(Date.now() - intervalHours * 60 * 60 * 1000)
+    return new Date(p.last_synced_at) < staleAfter
   })
 
   if (!sourcesToSync.length) {

@@ -39,6 +39,7 @@ const ThisWeek = () => {
   const [weekOffset, setWeekOffset] = useState(0);
   const [selectedDay, setSelectedDay] = useState<Date>(new Date());
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
+  const [filter, setFilter] = useState<"All" | EventCategory>("All");
   const [syncing, setSyncing] = useState(false);
   const syncFiredRef = useRef(false);
   const isMobile = useIsMobile();
@@ -73,7 +74,7 @@ const ThisWeek = () => {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
         const data = await res.json().catch(() => ({}));
-        if (data.ok && !data.skipped) {
+        if (!data.skipped) {
           queryClient.invalidateQueries({ queryKey: ["events"] });
         }
       } finally {
@@ -101,6 +102,8 @@ const ThisWeek = () => {
   });
 
   const dayEvents = events.filter((e) => isSameDay(new Date(e.date), selectedDay));
+  const activeCategories = [...new Set(dayEvents.map((e) => e.category))] as EventCategory[];
+  const filteredEvents = filter === "All" ? dayEvents : dayEvents.filter((e) => e.category === filter);
 
   const toggleSave = async (id: string) => {
     const event = events.find((e) => e.id === id);
@@ -122,6 +125,7 @@ const ThisWeek = () => {
   const handleSelectDay = (day: Date) => {
     setSelectedDay(day);
     setSelectedEvent(null);
+    setFilter("All");
   };
 
   return (
@@ -216,6 +220,26 @@ const ThisWeek = () => {
         </div>
       </div>
 
+      {/* Category filter pills — only show if there are events */}
+      {activeCategories.length > 1 && (
+        <div className="mb-5 flex flex-wrap gap-1.5">
+          {(["All", ...activeCategories] as ("All" | EventCategory)[]).map((cat) => (
+            <button
+              key={cat}
+              onClick={() => { setFilter(cat); setSelectedEvent(null); }}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                filter === cat
+                  ? "bg-foreground text-background"
+                  : "bg-secondary text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Content: card list + desktop detail panel */}
       <div className="flex items-start gap-6">
         {/* Card list */}
@@ -234,13 +258,13 @@ const ThisWeek = () => {
                     <div key={i} className="h-[76px] animate-pulse rounded-xl bg-secondary" />
                   ))}
                 </div>
-              ) : dayEvents.length === 0 ? (
+              ) : filteredEvents.length === 0 ? (
                 <p className="py-16 text-center text-sm text-muted-foreground">
-                  Nothing on this day.
+                  {dayEvents.length === 0 ? "Nothing on this day." : "Nothing in this category."}
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {dayEvents.map((event, i) => (
+                  {filteredEvents.map((event, i) => (
                     <motion.div
                       key={event.id}
                       initial={{ opacity: 0, y: 8 }}
@@ -303,7 +327,7 @@ const ThisWeek = () => {
                     </div>
 
                     <p className="text-xs text-muted-foreground">
-                      {format(new Date(selectedEvent.date), "EEEE d MMMM")} · {selectedEvent.time}
+                      {format(new Date(selectedEvent.date), "EEEE d MMMM")}{selectedEvent.time && selectedEvent.time !== '00:00' ? ` · ${selectedEvent.time}` : ''}
                     </p>
 
                     {selectedEvent.description && (
@@ -435,7 +459,9 @@ function EventCard({
       </div>
       <p className="text-xs text-muted-foreground">{event.venue}</p>
       <div className="mt-3 flex items-center justify-between">
-        <span className="text-xs tabular-nums text-muted-foreground">{event.time}</span>
+        {event.time && event.time !== '00:00' && (
+          <span className="text-xs tabular-nums text-muted-foreground">{event.time}</span>
+        )}
         <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", categoryColors[event.category])}>
           {event.category}
         </span>

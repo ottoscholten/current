@@ -122,6 +122,8 @@ const Sources = () => {
   const [addError, setAddError] = useState<string | null>(null);
   const [addHint, setAddHint] = useState("");
   const [addSyncHours, setAddSyncHours] = useState(24);
+  const [addTotalFound, setAddTotalFound] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
 
   const { user, session } = useAuth();
 
@@ -232,6 +234,7 @@ const Sources = () => {
       setAddSelectors(data.selectors);
       setAddPreview(data.preview);
       setAddSyncHours(data.suggestedSyncHours ?? 24);
+      setAddTotalFound(data.totalFound ?? 0);
       setAddHint("");
       setAddStep("preview");
     } catch {
@@ -241,49 +244,58 @@ const Sources = () => {
   };
 
   const handleSave = async () => {
-    const { data: sourceData, error: sourceError } = await supabase
-      .from("sources")
-      .insert({
-        name: addName.trim(),
-        url: addUrl.trim(),
-        type: 'Website',
-        categories: addCategories,
-        is_platform: false,
-        selectors: addSelectors,
-        created_by: user!.id,
-      })
-      .select()
-      .single();
+    if (!user) { toast.error("Not signed in"); return; }
+    setIsSaving(true);
+    try {
+      const { data: sourceData, error: sourceError } = await supabase
+        .from("sources")
+        .insert({
+          name: addName.trim(),
+          url: addUrl.trim(),
+          type: 'Website',
+          categories: addCategories,
+          is_platform: false,
+          selectors: addSelectors,
+          created_by: user.id,
+        })
+        .select()
+        .single();
 
-    if (sourceError) {
-      toast.error(sourceError.message || "Failed to save source");
-      return;
+      if (sourceError) {
+        toast.error(sourceError.message || "Failed to save source");
+        return;
+      }
+
+      const { error: prefError } = await supabase.from("user_source_prefs").upsert({
+        user_id: user.id,
+        source_id: sourceData.id,
+        is_active: true,
+        skip_taste_filter: true,
+        sync_interval_hours: addSyncHours,
+        last_synced_at: null,
+      });
+
+      if (prefError) {
+        toast.error(prefError.message || "Failed to activate source");
+        return;
+      }
+
+      setSources((prev) => [...prev, {
+        ...sourceData,
+        is_active: true,
+        skip_taste_filter: true,
+        last_synced_at: null,
+        created_by: user.id,
+      }]);
+
+      handleReset();
+      toast.success(`${addName} added`);
+    } catch (err) {
+      console.error("handleSave error:", err);
+      toast.error("Something went wrong — please try again.");
+    } finally {
+      setIsSaving(false);
     }
-
-    const { error: prefError } = await supabase.from("user_source_prefs").upsert({
-      user_id: user!.id,
-      source_id: sourceData.id,
-      is_active: true,
-      skip_taste_filter: true,
-      sync_interval_hours: addSyncHours,
-      last_synced_at: null,
-    });
-
-    if (prefError) {
-      toast.error(prefError.message || "Failed to activate source");
-      return;
-    }
-
-    setSources((prev) => [...prev, {
-      ...sourceData,
-      is_active: true,
-      skip_taste_filter: true,
-      last_synced_at: null,
-      created_by: user!.id,
-    }]);
-
-    handleReset();
-    toast.success(`${addName} added`);
   };
 
   const handleReset = () => {
@@ -463,7 +475,7 @@ const Sources = () => {
                 <DialogTitle>Here's what we found</DialogTitle>
                 <DialogDescription>
                   {addPreview.length > 0
-                    ? `Do these look like the right events from ${urlDomain}?`
+                    ? `Found ${addTotalFound} event${addTotalFound !== 1 ? 's' : ''} on this page. Do these look right?`
                     : `We didn't find any events on this page.`}
                 </DialogDescription>
               </DialogHeader>
@@ -612,8 +624,8 @@ const Sources = () => {
                 </div>
               </div>
               <DialogFooter>
-                <Button onClick={handleSave} disabled={!addName.trim()}>
-                  Add to my week
+                <Button onClick={handleSave} disabled={!addName.trim() || isSaving}>
+                  {isSaving ? "Saving…" : "Add to my week"}
                 </Button>
               </DialogFooter>
             </>
