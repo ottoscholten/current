@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
@@ -28,6 +29,7 @@ interface Source {
 interface PreviewEvent {
   title: string;
   date: string;
+  time?: string;
   link: string;
   description: string;
 }
@@ -74,7 +76,7 @@ const SourceRow = ({
         onCheckedChange={() => onToggleActive(source.id, source.is_active)}
       />
     </div>
-    {!source.is_platform && (
+    {!source.is_platform && source.is_active && (
       <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
         <Switch
           checked={!source.skip_taste_filter}
@@ -86,9 +88,19 @@ const SourceRow = ({
   </div>
 );
 
+// ─── Sync frequency options ──────────────────────────────────────────────────
+
+const SYNC_OPTIONS = [
+  { hours: 12,  label: "Twice daily",   hint: "Good for venues that post events last-minute." },
+  { hours: 24,  label: "Daily",         hint: "A good default for most event listings." },
+  { hours: 72,  label: "Every 3 days",  hint: "Works well for weekly programmes." },
+  { hours: 168, label: "Weekly",        hint: "Ideal for monthly or seasonal listings." },
+  { hours: 720, label: "Monthly",       hint: "For venues that plan well ahead." },
+] as const;
+
 // ─── Main page ───────────────────────────────────────────────────────────────
 
-type AddStep = "form" | "analysing" | "preview";
+type AddStep = "url" | "checking" | "preview" | "fix" | "setup";
 
 const Sources = () => {
   const [sources, setSources] = useState<Source[]>([]);
@@ -101,17 +113,17 @@ const Sources = () => {
 
   // Add dialog state
   const [addOpen, setAddOpen] = useState(false);
-  const [addStep, setAddStep] = useState<AddStep>("form");
+  const [addStep, setAddStep] = useState<AddStep>("url");
   const [addUrl, setAddUrl] = useState("");
   const [addCategories, setAddCategories] = useState<string[]>(["Other"]);
   const [addName, setAddName] = useState("");
-  const [addSelectors, setAddSelectors] = useState<unknown>(null);
+  const [addSelectors, setAddSelectors] = useState<Json | null>(null);
   const [addPreview, setAddPreview] = useState<PreviewEvent[]>([]);
   const [addError, setAddError] = useState<string | null>(null);
   const [addHint, setAddHint] = useState("");
   const [addSyncHours, setAddSyncHours] = useState(24);
 
-  const { user } = useAuth();
+  const { user, session } = useAuth();
 
   const fetchSources = async () => {
     const [{ data: sourcesData, error }, { data: prefsData, error: prefsError }] = await Promise.all([
@@ -131,7 +143,9 @@ const Sources = () => {
     const prefsMap = Object.fromEntries((prefsData ?? []).map((p) => [p.source_id, p]));
     const merged = (sourcesData ?? []).map((s) => ({
       ...s,
-      is_active: prefsMap[s.id]?.is_active ?? s.is_active,
+      // No source is active by default — user must explicitly enable each one.
+      // This ensures a pref row exists before sync runs.
+      is_active: prefsMap[s.id]?.is_active ?? false,
       skip_taste_filter: prefsMap[s.id]?.skip_taste_filter ?? false,
       last_synced_at: prefsMap[s.id]?.last_synced_at ?? null,
     }));
@@ -146,10 +160,13 @@ const Sources = () => {
 
   const handleToggleActive = async (id: string, current: boolean) => {
     const enabling = !current;
+    const source = sources.find((s) => s.id === id);
     const { error } = await supabase.from("user_source_prefs").upsert({
       user_id: user!.id,
       source_id: id,
       is_active: enabling,
+      // Custom website sources always skip taste filtering — they're specific venues you follow
+      ...(!source?.is_platform ? { skip_taste_filter: true } : {}),
       ...(enabling ? { last_synced_at: null } : {}),
     });
     if (error) { toast.error("Failed to update source"); return; }
@@ -165,7 +182,6 @@ const Sources = () => {
       user_id: user!.id,
       source_id: id,
       skip_taste_filter: newSkip,
-      // Reset sync so next visit re-filters with new setting
       last_synced_at: null,
     });
     if (error) { toast.error("Failed to update taste filter"); return; }
@@ -184,18 +200,22 @@ const Sources = () => {
     toast.success("Name updated");
   };
 
-  const handleAnalyse = async () => {
+  const handleCheck = async () => {
     if (!addUrl.trim()) return;
-    setAddStep("analysing");
+    setAddStep("checking");
     setAddError(null);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setAddError("Not signed in — please refresh and try again.");
+        setAddStep("url");
+        return;
+      }
       const res = await fetch("/.netlify/functions/extract-selectors", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session!.access_token}`,
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({ url: addUrl.trim(), hint: addHint.trim() || undefined }),
       });
@@ -203,8 +223,8 @@ const Sources = () => {
       const data = await res.json();
 
       if (!res.ok) {
-        setAddError(data.error || "Analysis failed — try a different URL.");
-        setAddStep("form");
+        setAddError(data.error || "We couldn't read this page — check the URL and try again.");
+        setAddStep("url");
         return;
       }
 
@@ -212,15 +232,15 @@ const Sources = () => {
       setAddSelectors(data.selectors);
       setAddPreview(data.preview);
       setAddSyncHours(data.suggestedSyncHours ?? 24);
+      setAddHint("");
       setAddStep("preview");
     } catch {
-      setAddError("Could not reach the analysis service. Try again.");
-      setAddStep("form");
+      setAddError("Something went wrong — please try again.");
+      setAddStep("url");
     }
   };
 
   const handleSave = async () => {
-    console.log("handleSave fired", { addName, addUrl, addCategories, addSelectors })
     const { data: sourceData, error: sourceError } = await supabase
       .from("sources")
       .insert({
@@ -235,11 +255,9 @@ const Sources = () => {
       .select()
       .single();
 
-    console.log("sourceData:", sourceData, "sourceError:", sourceError)
     if (sourceError) {
-      console.error("Failed to save source:", sourceError)
-      toast.error(sourceError.message || "Failed to save source")
-      return
+      toast.error(sourceError.message || "Failed to save source");
+      return;
     }
 
     const { error: prefError } = await supabase.from("user_source_prefs").upsert({
@@ -252,9 +270,8 @@ const Sources = () => {
     });
 
     if (prefError) {
-      console.error("Failed to activate source:", prefError)
-      toast.error(prefError.message || "Failed to activate source")
-      return
+      toast.error(prefError.message || "Failed to activate source");
+      return;
     }
 
     setSources((prev) => [...prev, {
@@ -262,6 +279,7 @@ const Sources = () => {
       is_active: true,
       skip_taste_filter: true,
       last_synced_at: null,
+      created_by: user!.id,
     }]);
 
     handleReset();
@@ -270,7 +288,7 @@ const Sources = () => {
 
   const handleReset = () => {
     setAddOpen(false);
-    setAddStep("form");
+    setAddStep("url");
     setAddUrl("");
     setAddCategories(["Other"]);
     setAddName("");
@@ -284,10 +302,11 @@ const Sources = () => {
   const q = searchQuery.toLowerCase();
   const filtered = q ? sources.filter((s) => s.name.toLowerCase().includes(q)) : sources;
   const platformSources = filtered.filter((s) => s.is_platform);
-  // Your websites: sources you created or have explicitly activated
-  const mySources = filtered.filter((s) => !s.is_platform && s.is_active);
-  // Community: inactive sources created by others — only visible when searching
-  const communitySources = q ? filtered.filter((s) => !s.is_platform && !s.is_active) : [];
+  const mySources = filtered.filter((s) => !s.is_platform && s.created_by === user!.id);
+  const communitySources = filtered.filter((s) => !s.is_platform && s.created_by !== user!.id);
+
+  const syncHint = SYNC_OPTIONS.find((o) => o.hours === addSyncHours)?.hint ?? "";
+  const urlDomain = (() => { try { return new URL(addUrl).hostname.replace(/^www\./, ''); } catch { return addUrl; } })();
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-6">
@@ -312,7 +331,6 @@ const Sources = () => {
       ) : (
         <div className="space-y-8">
 
-          {/* Platform integrations */}
           {platformSources.length > 0 && (
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -326,7 +344,6 @@ const Sources = () => {
             </div>
           )}
 
-          {/* Your active custom websites */}
           {mySources.length > 0 && (
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -340,11 +357,10 @@ const Sources = () => {
             </div>
           )}
 
-          {/* Community sources — only shown when searching */}
           {communitySources.length > 0 && (
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                From the community
+                Community created
               </p>
               <div className="space-y-2">
                 {communitySources.map((s) => (
@@ -386,28 +402,170 @@ const Sources = () => {
       <Dialog open={addOpen} onOpenChange={(open) => { if (!open) handleReset(); }}>
         <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
 
-          {/* ── Step: form ── */}
-          {addStep === "form" && (
+          {/* ── Step: url ── */}
+          {addStep === "url" && (
             <>
               <DialogHeader>
-                <DialogTitle>Add website</DialogTitle>
+                <DialogTitle>Add an events website</DialogTitle>
                 <DialogDescription>
-                  Paste the URL of an events page — we'll analyse it and extract events automatically.
+                  Got a favourite venue, club night, or events page you don't want to miss? Paste the link and we'll watch it for you — checking regularly for new events and adding anything that looks like your kind of thing to your week.
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="url">URL</Label>
+                  <Label htmlFor="url">Link to the events page</Label>
                   <Input
                     id="url"
                     value={addUrl}
                     onChange={(e) => setAddUrl(e.target.value)}
-                    placeholder="https://..."
-                    onKeyDown={(e) => e.key === "Enter" && handleAnalyse()}
+                    placeholder="e.g. https://fabriclondon.com/events"
+                    onKeyDown={(e) => e.key === "Enter" && handleCheck()}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Use the URL of their events or programme page — not the homepage.
+                  </p>
+                </div>
+                {addError && (
+                  <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    {addError}
+                  </div>
+                )}
+              </div>
+              <DialogFooter>
+                <Button onClick={handleCheck} disabled={!addUrl.trim()}>
+                  Check this site
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+
+          {/* ── Step: checking ── */}
+          {addStep === "checking" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Checking this page…</DialogTitle>
+                <DialogDescription className="break-all text-xs">{addUrl}</DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col items-center gap-3 py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  {addHint ? "Trying again with your feedback…" : "Looking for events on this page…"}
+                </p>
+              </div>
+            </>
+          )}
+
+          {/* ── Step: preview ── */}
+          {addStep === "preview" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Here's what we found</DialogTitle>
+                <DialogDescription>
+                  {addPreview.length > 0
+                    ? `Do these look like the right events from ${urlDomain}?`
+                    : `We didn't find any events on this page.`}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="py-2">
+                {addPreview.length > 0 ? (
+                  <div className="space-y-1.5 rounded-md border border-border p-3">
+                    {addPreview.map((e, i) => (
+                      <div key={i} className="border-b border-border pb-1.5 last:border-0 last:pb-0">
+                        {e.link ? (
+                          <a
+                            href={e.link.startsWith('http') ? e.link : `${new URL(addUrl).origin}${e.link}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm font-medium leading-snug hover:underline"
+                          >
+                            {e.title}
+                          </a>
+                        ) : (
+                          <p className="text-sm font-medium leading-snug">{e.title}</p>
+                        )}
+                        <p className="text-[11px] text-muted-foreground">
+                          {[e.date, e.time].filter(Boolean).join(' · ')}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Try telling us what to look for and we'll take another look.
+                  </p>
+                )}
+              </div>
+              <DialogFooter className="gap-2">
+                <Button variant="outline" onClick={() => setAddStep("fix")}>
+                  {addPreview.length > 0 ? "Something's off" : "Tell us what to look for"}
+                </Button>
+                {addPreview.length > 0 && (
+                  <Button onClick={() => setAddStep("setup")}>
+                    Looks right →
+                  </Button>
+                )}
+              </DialogFooter>
+            </>
+          )}
+
+          {/* ── Step: fix ── */}
+          {addStep === "fix" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  <button
+                    onClick={() => setAddStep("preview")}
+                    className="mr-2 inline-flex items-center text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  What's off?
+                </DialogTitle>
+                <DialogDescription>
+                  Describe what doesn't look right in plain English and we'll try again. For example: "the dates are missing", "it's showing the wrong section of the page", or "only past events are coming up".
+                </DialogDescription>
+              </DialogHeader>
+              <div className="py-2 space-y-1">
+                <textarea
+                  value={addHint}
+                  onChange={(e) => setAddHint(e.target.value.slice(0, 500))}
+                  placeholder="Dates are missing / showing the wrong events / only past events…"
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                  rows={3}
+                  autoFocus
+                />
+                <p className="text-right text-[10px] text-muted-foreground">{addHint.length}/500</p>
+              </div>
+              <DialogFooter>
+                <Button onClick={handleCheck} disabled={!addHint.trim()}>
+                  Try again
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+
+          {/* ── Step: setup ── */}
+          {addStep === "setup" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Almost done</DialogTitle>
+                <DialogDescription>
+                  A couple of quick settings before we start tracking this site.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-5 py-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="name">What do you want to call it?</Label>
+                  <Input
+                    id="name"
+                    value={addName}
+                    onChange={(e) => setAddName(e.target.value)}
+                    placeholder="e.g. Fabric, Corsica Studios, Boiler Room…"
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <Label>Categories</Label>
+                <div className="space-y-2">
+                  <Label>What kind of events does it list?</Label>
                   <div className="flex flex-wrap gap-2">
                     {(["Music", "Dance", "Comedy", "Art", "Other"] as const).map((cat) => {
                       const selected = addCategories.includes(cat);
@@ -431,94 +589,10 @@ const Sources = () => {
                     })}
                   </div>
                 </div>
-                {addError && (
-                  <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    {addError}
-                  </div>
-                )}
-              </div>
-              <DialogFooter>
-                <Button onClick={handleAnalyse} disabled={!addUrl.trim()}>
-                  Analyse
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-
-          {/* ── Step: analysing ── */}
-          {addStep === "analysing" && (
-            <>
-              <DialogHeader>
-                <DialogTitle>Analysing page</DialogTitle>
-                <DialogDescription className="break-all text-xs">{addUrl}</DialogDescription>
-              </DialogHeader>
-              <div className="flex flex-col items-center gap-3 py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">Extracting event structure…</p>
-              </div>
-            </>
-          )}
-
-          {/* ── Step: preview ── */}
-          {addStep === "preview" && (
-            <>
-              <DialogHeader>
-                <DialogTitle>
-                  <button
-                    onClick={() => setAddStep("form")}
-                    className="mr-2 inline-flex items-center text-muted-foreground hover:text-foreground"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </button>
-                  Preview
-                </DialogTitle>
-                <DialogDescription>
-                  Check the extracted events look right before saving.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 py-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="name">Name</Label>
-                  <Input
-                    id="name"
-                    value={addName}
-                    onChange={(e) => setAddName(e.target.value)}
-                    placeholder="Source name"
-                  />
-                </div>
                 <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">Sample events found</p>
-                  {addPreview.length ? (
-                    <div className="space-y-1.5 rounded-md border border-border p-3">
-                      {addPreview.map((e, i) => (
-                        <div key={i} className="border-b border-border pb-1.5 last:border-0 last:pb-0">
-                          {e.link ? (
-                            <a
-                              href={e.link.startsWith('http') ? e.link : `${new URL(addUrl).origin}${e.link}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-sm font-medium leading-snug hover:underline"
-                            >
-                              {e.title}
-                            </a>
-                          ) : (
-                            <p className="text-sm font-medium leading-snug">{e.title}</p>
-                          )}
-                          <p className="text-[11px] text-muted-foreground">
-                            {[e.date, e.time].filter(Boolean).join(' · ')}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">No sample events extracted.</p>
-                  )}
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Sync frequency</Label>
-                  <div className="flex gap-2">
-                    {([{ hours: 12, label: "Twice daily" }, { hours: 24, label: "Daily" }, { hours: 72, label: "Every 3 days" }, { hours: 168, label: "Weekly" }, { hours: 720, label: "Monthly" }] as const).map(({ hours, label }) => (
+                  <Label>How often should we check for new events?</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {SYNC_OPTIONS.map(({ hours, label }) => (
                       <button
                         key={hours}
                         onClick={() => setAddSyncHours(hours)}
@@ -532,30 +606,14 @@ const Sources = () => {
                       </button>
                     ))}
                   </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    Suggested based on how far ahead events are scheduled.
-                  </p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="hint">Something wrong? Tell the AI what to fix</Label>
-                  <textarea
-                    id="hint"
-                    value={addHint}
-                    onChange={(e) => setAddHint(e.target.value)}
-                    placeholder="e.g. the time is missing, or the date selector is picking up the wrong element"
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                    rows={2}
-                  />
+                  {syncHint && (
+                    <p className="text-[11px] text-muted-foreground">{syncHint}</p>
+                  )}
                 </div>
               </div>
-              <DialogFooter className="gap-2">
-                {addHint.trim() && (
-                  <Button variant="outline" onClick={handleAnalyse}>
-                    Try again
-                  </Button>
-                )}
+              <DialogFooter>
                 <Button onClick={handleSave} disabled={!addName.trim()}>
-                  Save source
+                  Add to my week
                 </Button>
               </DialogFooter>
             </>
