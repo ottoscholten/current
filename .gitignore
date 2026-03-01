@@ -34,3 +34,5 @@ dist-ssr
 # Personal config
 .claude/
 .obsidian/
+CLAUDE.md
+TASKS.md
