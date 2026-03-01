@@ -5,11 +5,11 @@ import { syncWebsite } from '../lib/sources/website.js'
 
 const MIN_CHECK_INTERVAL_HOURS = 1
 
-// Returns the next 7 date strings starting from today
+// Returns the next 14 date strings starting from today
 function getWeekDays() {
   const days = []
   const today = new Date()
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 14; i++) {
     const d = new Date(today)
     d.setDate(today.getDate() + i)
     days.push(d.toISOString().split('T')[0])
@@ -48,7 +48,7 @@ export const handler = async (event) => {
   // Fetch all active sources for this user
   const { data: activePrefs } = await supabase
     .from('user_source_prefs')
-    .select('source_id, last_synced_at, skip_taste_filter, sync_interval_hours, synced_days, sources(id, name, url, is_platform, selectors)')
+    .select('source_id, last_synced_at, skip_taste_filter, sync_interval_hours, synced_days, sources(id, name, url, categories, is_platform, selectors)')
     .eq('user_id', user.id)
     .eq('is_active', true)
 

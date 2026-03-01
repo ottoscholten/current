@@ -103,6 +103,7 @@ const Sources = () => {
   const [addOpen, setAddOpen] = useState(false);
   const [addStep, setAddStep] = useState<AddStep>("form");
   const [addUrl, setAddUrl] = useState("");
+  const [addCategories, setAddCategories] = useState<string[]>(["Other"]);
   const [addName, setAddName] = useState("");
   const [addSelectors, setAddSelectors] = useState<unknown>(null);
   const [addPreview, setAddPreview] = useState<PreviewEvent[]>([]);
@@ -219,12 +220,14 @@ const Sources = () => {
   };
 
   const handleSave = async () => {
+    console.log("handleSave fired", { addName, addUrl, addCategories, addSelectors })
     const { data: sourceData, error: sourceError } = await supabase
       .from("sources")
       .insert({
         name: addName.trim(),
         url: addUrl.trim(),
         type: 'Website',
+        categories: addCategories,
         is_platform: false,
         selectors: addSelectors,
         created_by: user!.id,
@@ -232,6 +235,7 @@ const Sources = () => {
       .select()
       .single();
 
+    console.log("sourceData:", sourceData, "sourceError:", sourceError)
     if (sourceError) {
       console.error("Failed to save source:", sourceError)
       toast.error(sourceError.message || "Failed to save source")
@@ -268,6 +272,7 @@ const Sources = () => {
     setAddOpen(false);
     setAddStep("form");
     setAddUrl("");
+    setAddCategories(["Other"]);
     setAddName("");
     setAddSelectors(null);
     setAddPreview([]);
@@ -400,6 +405,31 @@ const Sources = () => {
                     placeholder="https://..."
                     onKeyDown={(e) => e.key === "Enter" && handleAnalyse()}
                   />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Categories</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {(["Music", "Dance", "Comedy", "Art", "Other"] as const).map((cat) => {
+                      const selected = addCategories.includes(cat);
+                      return (
+                        <button
+                          key={cat}
+                          onClick={() => setAddCategories((prev) =>
+                            selected
+                              ? prev.length > 1 ? prev.filter((c) => c !== cat) : prev
+                              : [...prev, cat]
+                          )}
+                          className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                            selected
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-secondary text-muted-foreground"
+                          }`}
+                        >
+                          {cat}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
                 {addError && (
                   <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">

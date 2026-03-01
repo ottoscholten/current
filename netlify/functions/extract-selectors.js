@@ -124,18 +124,25 @@ Return ONLY the JSON object.`
 // Apply the AI-extracted selectors to get a sample of events for preview
 function extractPreview($, selectors, sourceUrl) {
   const events = []
+  const isHybridLayout = !!(selectors.dateHeader && selectors.date)
+  let lastDate = ''
   $(selectors.container).each((i, el) => {
-    if (i >= 5) return false // preview: first 5 only
+    if (events.length >= 5) return false // preview: first 5 with dates
     const title = $(el).find(selectors.title).first().text().trim()
     const headerDate = selectors.dateHeader ? extractDateFromHeader($, el, selectors.dateHeader) : ''
     const rowDate = selectors.date ? $(el).find(selectors.date).first().text().trim() : ''
-    const date = headerDate && rowDate ? combineDateParts(rowDate, headerDate) : headerDate || rowDate
+    // In hybrid layouts a missing day number means no specific date (e.g. a course spanning the whole month) — skip
+    if (isHybridLayout && !rowDate) return
+    const resolved = headerDate && rowDate ? combineDateParts(rowDate, headerDate) : headerDate || rowDate
+    // Carry forward the last seen date for non-hybrid layouts (e.g. 2nd/3rd event on same day)
+    const date = resolved || lastDate
+    if (resolved) lastDate = resolved
     const time = selectors.time ? $(el).find(selectors.time).first().text().trim() : ''
     const link = extractHref($, el, selectors.link, sourceUrl)
     const description = selectors.description
       ? $(el).find(selectors.description).first().text().trim()
       : ''
-    if (title) {
+    if (title && date) {
       console.log(`[extractPreview] "${title}" — headerDate: "${headerDate}", rowDate: "${rowDate}", date: "${date}", time: "${time}"`)
       events.push({ title, date, time, link, description })
     }
@@ -310,12 +317,15 @@ Return ONLY the JSON object.`
   const isHybrid = selectors.dateHeader && selectors.date
   const dateFormat = isHybrid ? null : selectors.dateHeader ? selectors.dateHeaderFormat : selectors.dateFormat
   const allDates = []
+  let lastDateStr = ''
   $(selectors.container).each((_, el) => {
     const headerDate = selectors.dateHeader
       ? (() => { let cur = $(el).prev(); while (cur.length) { if (cur.is(selectors.dateHeader)) return cur.text().trim(); cur = cur.prev() } return '' })()
       : ''
     const rowDate = selectors.date ? $(el).find(selectors.date).first().text().trim() : ''
-    const dateStr = headerDate && rowDate ? combineDateParts(rowDate, headerDate) : headerDate || rowDate
+    const resolved = headerDate && rowDate ? combineDateParts(rowDate, headerDate) : headerDate || rowDate
+    const dateStr = resolved || lastDateStr
+    if (resolved) lastDateStr = resolved
     const parsed = parseEventDate(dateStr, dateFormat)
     if (parsed) allDates.push(parsed)
   })

@@ -58,11 +58,18 @@ function extractHref($, el, linkSelector, fallbackUrl) {
 
 function scrapeEvents($, selectors, sourceUrl) {
   const events = []
+  const isHybridLayout = !!(selectors.dateHeader && selectors.date)
+  let lastDateStr = ''
   $(selectors.container).each((_, el) => {
     const title = $(el).find(selectors.title).first().text().trim()
     const headerDate = selectors.dateHeader ? extractDateFromHeader($, el, selectors.dateHeader) : ''
     const rowDate = selectors.date ? $(el).find(selectors.date).first().text().trim() : ''
-    const dateStr = headerDate && rowDate ? combineDateParts(rowDate, headerDate) : headerDate || rowDate
+    // In hybrid layouts a missing day number means no specific date — skip
+    if (isHybridLayout && !rowDate) return
+    const resolved = headerDate && rowDate ? combineDateParts(rowDate, headerDate) : headerDate || rowDate
+    // Carry forward the last seen date for non-hybrid layouts
+    const dateStr = resolved || lastDateStr
+    if (resolved) lastDateStr = resolved
     const timeStr = selectors.time ? $(el).find(selectors.time).first().text().trim() : ''
     const href = extractHref($, el, selectors.link, sourceUrl)
     const description = selectors.description
@@ -74,7 +81,7 @@ function scrapeEvents($, selectors, sourceUrl) {
   return events
 }
 
-function toWebsiteRow(event, userId, sourceId) {
+function toWebsiteRow(event, userId, sourceId, sourceCategory) {
   return {
     user_id: userId,
     source_id: sourceId,
@@ -83,7 +90,7 @@ function toWebsiteRow(event, userId, sourceId) {
     neighbourhood: null,
     date: event.date,
     time: event.time || '00:00',
-    category: 'Other',
+    category: sourceCategory ? sourceCategory.charAt(0).toUpperCase() + sourceCategory.slice(1).toLowerCase() : 'Other',
     is_saved: false,
     url: event.url,
     description: event.description || null,
@@ -91,7 +98,7 @@ function toWebsiteRow(event, userId, sourceId) {
 }
 
 export async function syncWebsite(supabase, userId, tasteProfile, tasteParsed = [], sourceRow, skipTasteFilter) {
-  const { selectors, url, name: sourceName, id: sourceId } = sourceRow
+  const { selectors, url, name: sourceName, id: sourceId, categories: sourceCategories } = sourceRow
 
   if (!selectors?.container) {
     throw new Error(`Source "${sourceName}" has no saved selectors — re-run setup.`)
@@ -153,7 +160,8 @@ export async function syncWebsite(supabase, userId, tasteProfile, tasteParsed = 
   }
 
   await supabase.from('events').delete().eq('source_id', sourceId).eq('user_id', userId)
-  await supabase.from('events').insert(toInsert.map(e => toWebsiteRow(e, userId, sourceId)))
+  const primaryCategory = (sourceCategories && sourceCategories[0]) || 'Other'
+  await supabase.from('events').insert(toInsert.map(e => toWebsiteRow(e, userId, sourceId, primaryCategory)))
   await updateLastSynced(supabase, userId, sourceId)
 
   return toInsert.length
