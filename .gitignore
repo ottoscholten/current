@@ -36,3 +36,7 @@ dist-ssr
 .obsidian/
 CLAUDE.md
 TASKS.md
+# Spawnhaus worktree files (local only)
+.kanban/task.json
+.kanban/WORKFLOW.md
+TASK_CONTEXT.md

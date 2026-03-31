@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio'
 import { parse, isValid } from 'date-fns'
-import { broadFilter, strictFilter } from '../ai.js'
+import { broadFilter, strictFilter, assignCategories } from '../ai.js'
 import { fetchPage, fetchWithBrowserless } from '../fetch-page.js'
 import { parseEventDate } from '../parse-date.js'
 
@@ -154,7 +154,7 @@ function scrapeEvents($, selectors, sourceUrl) {
   return events
 }
 
-function toWebsiteRow(event, userId, sourceId, sourceCategory) {
+function toWebsiteRow(event, userId, sourceId, category) {
   return {
     user_id: userId,
     source_id: sourceId,
@@ -163,7 +163,7 @@ function toWebsiteRow(event, userId, sourceId, sourceCategory) {
     neighbourhood: null,
     date: event.date,
     time: event.time || '00:00',
-    category: sourceCategory ? sourceCategory.charAt(0).toUpperCase() + sourceCategory.slice(1).toLowerCase() : 'Other',
+    category: category || 'Other',
     is_saved: false,
     url: event.url,
     description: event.description || null,
@@ -238,9 +238,18 @@ export async function syncWebsite(supabase, userId, tasteProfile, tasteParsed = 
     }
   }
 
+  // Assign per-event categories when source has multiple options; otherwise use the first
+  const fallbackCategory = (sourceCategories && sourceCategories[0]) || 'Other'
+  let categoryMap = {}
+  if (sourceCategories && sourceCategories.length > 1) {
+    const assignments = await assignCategories(toInsert, sourceCategories)
+    for (const { i, category } of assignments) {
+      if (sourceCategories.includes(category)) categoryMap[i] = category
+    }
+  }
+
   await supabase.from('events').delete().eq('source_id', sourceId).eq('user_id', userId).eq('is_saved', false)
-  const primaryCategory = (sourceCategories && sourceCategories[0]) || 'Other'
-  const rows = toInsert.map(e => toWebsiteRow(e, userId, sourceId, primaryCategory))
+  const rows = toInsert.map((e, i) => toWebsiteRow(e, userId, sourceId, categoryMap[i] || fallbackCategory))
   console.log(`[syncWebsite] ${sourceName}: inserting ${rows.length} events, sample:`, JSON.stringify(rows[0]))
   const { error: insertError } = await supabase.from('events').insert(rows)
   if (insertError) console.error(`[syncWebsite] ${sourceName} insert error:`, insertError.message)

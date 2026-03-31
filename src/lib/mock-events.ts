@@ -1,6 +1,6 @@
 import { startOfWeek, addDays, format } from "date-fns";
 
-export type EventCategory = "Music" | "Dance" | "Comedy" | "Art" | "Other";
+export type EventCategory = "Music" | "Dance" | "Comedy" | "Art" | "Film" | "Theatre" | "Exhibition" | "Talk" | "Other";
 
 export interface EventItem {
   id: string;
@@ -37,5 +37,9 @@ export const categoryColors: Record<EventCategory, string> = {
   Dance: "bg-pink-100 text-pink-700",
   Comedy: "bg-amber-100 text-amber-700",
   Art: "bg-violet-100 text-violet-700",
+  Film: "bg-sky-100 text-sky-700",
+  Theatre: "bg-rose-100 text-rose-700",
+  Exhibition: "bg-teal-100 text-teal-700",
+  Talk: "bg-orange-100 text-orange-700",
   Other: "bg-secondary text-secondary-foreground",
 };

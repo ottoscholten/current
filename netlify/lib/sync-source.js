@@ -1,10 +1,10 @@
 import { broadFilter, strictFilter } from './ai.js'
 
-// Returns the next 7 date strings starting from today
+// Returns the next 14 date strings starting from today
 function getWeekDays() {
   const days = []
   const today = new Date()
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 14; i++) {
     const d = new Date(today)
     d.setDate(today.getDate() + i)
     days.push(d.toISOString().split('T')[0])

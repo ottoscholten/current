@@ -41,6 +41,29 @@ function buildTasteContext(tasteProfile, tasteParsed = []) {
   return lines.join('\n')
 }
 
+// Assign a category to each event from the allowed list.
+// Only called when a source has multiple categories (otherwise the single category is used directly).
+export async function assignCategories(events, availableCategories) {
+  const eventList = events.map((e, i) => {
+    const desc = e.content || e.description || ''
+    return `${i}. "${e.title}"${desc ? ` — ${desc.slice(0, 150)}` : ''}`
+  }).join('\n')
+
+  const prompt = `Classify each event into exactly one of these categories: ${availableCategories.join(', ')}.
+
+Events:
+${eventList}
+
+Return ONLY a JSON object: {"assignments": [{"i": 0, "category": "Music"}, ...]}`
+
+  try {
+    const result = await callAI(prompt)
+    return result.assignments || []
+  } catch {
+    return []
+  }
+}
+
 // Pass 1: cheap coarse filter using title/venue/genres/artists only.
 // Removes obvious non-matches before the more expensive strict pass.
 export async function broadFilter(events, tasteProfile, tasteParsed = []) {

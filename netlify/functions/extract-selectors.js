@@ -224,7 +224,9 @@ function deriveDateStrategy($, containerEl, dateStr, containerSelector) {
       const strVal = String(val)
       // Skip JSON blobs, URLs, or anything too long to be a plain date string
       if (strVal.length > 60 || strVal.startsWith('{') || strVal.startsWith('[') || strVal.startsWith('http')) continue
-      if (/\d{4}-\d{2}-\d{2}/.test(strVal) || looksLikeDate(strVal)) {
+      // Require a specific day number — rejects month-only strings like "March 2026"
+      const hasDay = /\b\d{1,2}\b/.test(strVal.replace(/\d{4}/, ''))
+      if (/\d{4}-\d{2}-\d{2}/.test(strVal) || (looksLikeDate(strVal) && hasDay)) {
         // When the attribute is on the container element itself (depth 0), use the
         // already-generalised containerSelector (e.g. div[class*="override-brand--"])
         // so that all variants (Cinema, Music, etc.) are matched at sync time,
@@ -236,7 +238,28 @@ function deriveDateStrategy($, containerEl, dateStr, containerSelector) {
     el = el.parent()
   }
 
-  // 2. Compact date encoded in a link href (e.g. bookwhen: /events/ev-xxx-20260302183000/)
+  // 2. ISO date attribute inside a descendant (e.g. <time datetime="2026-03-01">)
+  let descWithAttr = null
+  containerEl.find('*').each((_, child) => {
+    if (descWithAttr) return false
+    const childAttrs = child.attribs || {}
+    for (const [attr, val] of Object.entries(childAttrs)) {
+      const strVal = String(val)
+      if (strVal.length > 60 || strVal.startsWith('{') || strVal.startsWith('[') || strVal.startsWith('http')) continue
+      const hasDay2 = /\b\d{1,2}\b/.test(strVal.replace(/\d{4}/, ''))
+      if (/\d{4}-\d{2}-\d{2}/.test(strVal) || (looksLikeDate(strVal) && hasDay2)) {
+        descWithAttr = { el: $(child), attr }
+        return false
+      }
+    }
+  })
+  if (descWithAttr) {
+    const sel = generateRelativeSelector($, containerEl, descWithAttr.el)
+    if (sel) return { type: 'descendant_attribute', selector: sel, attribute: descWithAttr.attr }
+  }
+
+  // 3b. Compact date encoded in a link href (e.g. /events/ev-xxx-20260302183000/)
+  //     Checked before text-based strategies since URL dates are always day-specific.
   let descFromHref = null
   containerEl.find('a').each((_, a) => {
     if (descFromHref) return false
@@ -246,25 +269,6 @@ function deriveDateStrategy($, containerEl, dateStr, containerSelector) {
   if (descFromHref) {
     const sel = generateRelativeSelector($, containerEl, descFromHref)
     if (sel) return { type: 'link_href', selector: sel }
-  }
-
-  // 3. ISO date attribute inside a descendant (e.g. <time datetime="2026-03-01">)
-  let descWithAttr = null
-  containerEl.find('*').each((_, child) => {
-    if (descWithAttr) return false
-    const childAttrs = child.attribs || {}
-    for (const [attr, val] of Object.entries(childAttrs)) {
-      const strVal = String(val)
-      if (strVal.length > 60 || strVal.startsWith('{') || strVal.startsWith('[') || strVal.startsWith('http')) continue
-      if (/\d{4}-\d{2}-\d{2}/.test(strVal) || looksLikeDate(strVal)) {
-        descWithAttr = { el: $(child), attr }
-        return false
-      }
-    }
-  })
-  if (descWithAttr) {
-    const sel = generateRelativeSelector($, containerEl, descWithAttr.el)
-    if (sel) return { type: 'descendant_attribute', selector: sel, attribute: descWithAttr.attr }
   }
 
   // 4. Ancestor text — e.g. a day header wrapping a group of events

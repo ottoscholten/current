@@ -98,6 +98,8 @@ export type Database = {
           selectors: Json | null
           type: string
           url: string
+          categories: string[] | null
+          created_by: string | null
         }
         Insert: {
           id?: string
@@ -108,6 +110,8 @@ export type Database = {
           selectors?: Json | null
           type: string
           url: string
+          categories?: string[] | null
+          created_by?: string | null
         }
         Update: {
           id?: string
@@ -118,6 +122,8 @@ export type Database = {
           selectors?: Json | null
           type?: string
           url?: string
+          categories?: string[] | null
+          created_by?: string | null
         }
         Relationships: []
       }
@@ -125,18 +131,24 @@ export type Database = {
         Row: {
           is_active: boolean
           last_synced_at: string | null
+          skip_taste_filter: boolean
+          sync_interval_hours: number
           source_id: string
           user_id: string
         }
         Insert: {
           is_active?: boolean
           last_synced_at?: string | null
+          skip_taste_filter?: boolean
+          sync_interval_hours?: number
           source_id: string
           user_id: string
         }
         Update: {
           is_active?: boolean
           last_synced_at?: string | null
+          skip_taste_filter?: boolean
+          sync_interval_hours?: number
           source_id?: string
           user_id?: string
         }

@@ -579,7 +579,7 @@ const Sources = () => {
                 <div className="space-y-2">
                   <Label>What kind of events does it list?</Label>
                   <div className="flex flex-wrap gap-2">
-                    {(["Music", "Dance", "Comedy", "Art", "Other"] as const).map((cat) => {
+                    {(["Music", "Dance", "Comedy", "Art", "Film", "Theatre", "Exhibition", "Talk", "Other"] as const).map((cat) => {
                       const selected = addCategories.includes(cat);
                       return (
                         <button
